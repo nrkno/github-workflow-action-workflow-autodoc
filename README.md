@@ -1,8 +1,10 @@
-# github-workflow-setenv
+# GitHub Workflow - AutoDoc
 
 Workflow to update docs based on workflow or actions parameters.
 
-<!-- autodoc start -->
+It uses github-action [nrkno/github-action-action-workflow-autodoc](https://github.com/nrkno/github-action-action-workflow-autodoc) to generate documentation
+
+<!-- start -->
 
 ## GitHub Workflow - AutoDoc
 
@@ -67,4 +69,4 @@ jobs:
       debug: `<value>` # Optional
 ```
 
-<!-- autodoc end -->
+<!-- end -->
