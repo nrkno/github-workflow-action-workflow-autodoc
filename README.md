@@ -36,7 +36,7 @@ on:
 jobs:
   example-job:
     name: example job
-    uses: nrkno/github-action-action-workflow-autodoc//home/n23790/git/nrkno/github/workflows/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@main
+    uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@main
     secrets: inherit
     with:
       runs-on: `<value>`
@@ -55,7 +55,7 @@ on:
 jobs:
   example-job:
     name: example job
-    uses: nrkno/github-action-action-workflow-autodoc//home/n23790/git/nrkno/github/workflows/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@main
+    uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@main
     secrets:
     with:
       runs-on: `<value>`
