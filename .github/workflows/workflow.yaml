@@ -47,7 +47,7 @@ jobs:
 
       - name: Update documentation
         id: doc_output
-        uses: nrkno/github-action-action-workflow-autodoc@v2.0.1
+        uses: nrkno/github-action-action-workflow-autodoc@v2.0.2
         with:
           workflow_file: ${{ inputs.workflow_file }}
           doc_file: ${{ inputs.doc_file }}
