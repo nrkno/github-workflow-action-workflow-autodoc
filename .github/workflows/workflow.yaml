@@ -35,6 +35,14 @@ on:
         required: false
         type: string
 
+    outputs:
+      autodoc_out:
+        description: "If enabled, the generated documentation for inputs, secrets, and outputs"
+        value: ${{ jobs.autodoc.outputs.autodoc_out }}
+      autodoc_type:
+        description: "The type automaticly detected by the script of the input_file documented: workflow or action"
+        value: ${{ jobs.autodoc.outputs.autodoc_type }}
+
 jobs:
   autodoc:
     name: Create documentation from workflow/action file
@@ -43,6 +51,7 @@ jobs:
       contents: write
     outputs:
       autodoc_out: ${{ toJson(steps.doc_output.outputs.autodoc_out) }}
+      autodoc_type: ${{ steps.doc_output.outputs.file_type }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
@@ -62,7 +71,7 @@ jobs:
           github_output: ${{ inputs.github_output }}
           debug: ${{ inputs.debug }}
 
-      - name: Commit changes
+      - name: Commit and push changes
         uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7
         with:
-          commit_message: "docs(autodoc): Update workflow documentation"
+          commit_message: "docs(autodoc): update documentation"
