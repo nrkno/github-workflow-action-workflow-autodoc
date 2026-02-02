@@ -8,7 +8,7 @@ permissions:
 jobs:
   autodoc:
     name: Auto-generated workflow documentation
-    uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@v1.1.2
+    uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@v1.1.3
     with:
       runs-on: '["nrk-azure-intern","linux"]'
       workflow_file: .github/workflows/workflow.yaml
