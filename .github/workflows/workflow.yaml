@@ -45,14 +45,14 @@ jobs:
       autodoc_out: ${{ toJson(steps.doc_output.outputs.autodoc_out) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6
         with:
           ref: ${{ github.head_ref }}
           persist-credentials: true
 
       - name: Update documentation
         id: doc_output
-        uses: nrkno/github-action-action-workflow-autodoc@v2
+        uses: nrkno/github-action-action-workflow-autodoc@93703f0104f79315f16dcb0cd285d136458b6e09 # v2
         with:
           workflow_file: ${{ inputs.workflow_file }}
           doc_file: ${{ inputs.doc_file }}
@@ -63,6 +63,6 @@ jobs:
           debug: ${{ inputs.debug }}
 
       - name: Commit changes
-        uses: stefanzweifel/git-auto-commit-action@v7
+        uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7
         with:
           commit_message: "docs(autodoc): Update workflow documentation"
