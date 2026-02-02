@@ -64,3 +64,4 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add ${{ inputs.doc_file }}
           git commit -m "docs: Update documentation in ${{ inputs.doc_file }}"
+          git push origin HEAD:${{ github.ref }}
