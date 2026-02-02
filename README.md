@@ -1,29 +1,28 @@
 # github-workflow-setenv
 
-Set environment.
+Workflow to update docs based on workflow or actions parameters.
 
 <!-- autodoc start -->
+
 ## GitHub Workflow - AutoDoc
 
 ### Required Inputs
 
-|Input name|Description|Type|Default|
-|---|---|---|---|
-|**runs-on**|Runs on, e.g. ubuntu-latest|string|`unknown`|
-|**workflow_file**|Path to the workflow file to document|string|`unknown`|
-|**doc_file**|Path to the markdown file to update with documentation|string|`unknown`|
+| Input name        | Description                                            | Type   | Default   |
+| ----------------- | ------------------------------------------------------ | ------ | --------- |
+| **runs-on**       | Runs on, e.g. ubuntu-latest                            | string | `unknown` |
+| **workflow_file** | Path to the workflow file to document                  | string | `unknown` |
+| **doc_file**      | Path to the markdown file to update with documentation | string | `unknown` |
 
 ### Optional Inputs
 
-|Input name|Description|Type|Default|
-|---|---|---|---|
-|**start_token**|Token marking the start of the autodoc section|string|`None`|
-|**end_token**|Token marking the end of the autodoc section|string|`None`|
-|**table**|Format inputs as a markdown table|string|`None`|
-|**github_output**|Print documented inputs, secrets, and outputs to GitHub Action outputs|string|`None`|
-|**debug**|Print debug messages. 0=none, 1=some, 2=more, 3=all|string|`None`|
-
-
+| Input name        | Description                                                            | Type   | Default |
+| ----------------- | ---------------------------------------------------------------------- | ------ | ------- |
+| **start_token**   | Token marking the start of the autodoc section                         | string | `None`  |
+| **end_token**     | Token marking the end of the autodoc section                           | string | `None`  |
+| **table**         | Format inputs as a markdown table                                      | string | `None`  |
+| **github_output** | Print documented inputs, secrets, and outputs to GitHub Action outputs | string | `None`  |
+| **debug**         | Print debug messages. 0=none, 1=some, 2=more, 3=all                    | string | `None`  |
 
 ### Simple example usage
 
@@ -67,6 +66,5 @@ jobs:
       github_output: `<value>` # Optional
       debug: `<value>` # Optional
 ```
-
 
 <!-- autodoc end -->
