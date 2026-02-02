@@ -1,0 +1,66 @@
+name: GitHub Workflow - AutoDoc
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: "Runs on, e.g. ubuntu-latest"
+        required: true
+        type: string
+      workflow_file:
+        description: "Path to the workflow file to document"
+        required: true
+        type: string
+      doc_file:
+        description: "Path to the markdown file to update with documentation"
+        required: true
+        type: string
+      start_token:
+        description: "Token marking the start of the autodoc section"
+        required: false
+        type: string
+      end_token:
+        description: "Token marking the end of the autodoc section"
+        required: false
+        type: string
+      table:
+        description: "Format inputs as a markdown table"
+        required: false
+        type: string
+      github_output:
+        description: "Print documented inputs, secrets, and outputs to GitHub Action outputs"
+        required: false
+        type: string
+      debug:
+        description: "Print debug messages. 0=none, 1=some, 2=more, 3=all"
+        required: false
+        type: string
+
+jobs:
+  autodoc:
+    name: Create documentation from workflow/action file
+    runs-on: ${{ fromJson(inputs.runs-on) }}
+    outputs:
+      autodoc_out: ${{ toJson(steps.doc_output.outputs.autodoc_out) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Update documentation
+        id: doc_output
+        uses: nrkno/github-action-action-workflow-autodoc@v2.0.1
+        with:
+          workflow_file: ${{ inputs.workflow_file }}
+          doc_file: ${{ inputs.doc_file }}
+          start_token: ${{ inputs.start_token }}
+          end_token: ${{ inputs.end_token }}
+          table: ${{ inputs.table }}
+          github_output: ${{ inputs.github_output }}
+          debug: ${{ inputs.debug }}
+
+      - name: Commit updated documentation
+        if: steps.doc_output.outputs.autodoc_out != ''
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add ${{ inputs.doc_file }}
+          git commit -m "docs: Update documentation in ${{ inputs.doc_file }}"
