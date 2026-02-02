@@ -39,15 +39,20 @@ jobs:
   autodoc:
     name: Create documentation from workflow/action file
     runs-on: ${{ fromJson(inputs.runs-on) }}
+    permissions:
+      contents: write
     outputs:
       autodoc_out: ${{ toJson(steps.doc_output.outputs.autodoc_out) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
 
       - name: Update documentation
         id: doc_output
-        uses: nrkno/github-action-action-workflow-autodoc@v2.0.3
+        uses: nrkno/github-action-action-workflow-autodoc@v2
         with:
           workflow_file: ${{ inputs.workflow_file }}
           doc_file: ${{ inputs.doc_file }}
@@ -57,11 +62,7 @@ jobs:
           github_output: ${{ inputs.github_output }}
           debug: ${{ inputs.debug }}
 
-      - name: Commit updated documentation
-        if: steps.doc_output.outputs.autodoc_out != ''
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add ${{ inputs.doc_file }}
-          git commit -m "docs: Update documentation in ${{ inputs.doc_file }}"
-          git push origin HEAD:${{ github.ref }}
+      - name: Commit changes
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "docs(autodoc): Update workflow documentation"
