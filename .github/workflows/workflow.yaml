@@ -3,37 +3,43 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: "Runs on, e.g. ubuntu-latest"
+        description: |
+          Runs on, e.g. ubuntu-latest. 
+          make sure to enclose in single quotes `'` if using a list:
+          `'["self-hosted", "Linux"]'`
         required: true
         type: string
+        default: "ubuntu-latest"
       workflow_file:
         description: "Path to the workflow file to document"
         required: true
         type: string
+        default: "action.yaml"
       doc_file:
         description: "Path to the markdown file to update with documentation"
         required: true
         type: string
+        default: "README.md"
       start_token:
         description: "Token marking the start of the autodoc section"
         required: false
         type: string
+        default: "<!-- autodoc start -->"
       end_token:
         description: "Token marking the end of the autodoc section"
         required: false
         type: string
+        default: "<!-- autodoc end -->"
       table:
         description: "Format inputs as a markdown table"
         required: false
         type: string
-      github_output:
-        description: "Print documented inputs, secrets, and outputs to GitHub Action outputs"
-        required: false
-        type: string
+        default: "false"
       debug:
         description: "Print debug messages. 0=none, 1=some, 2=more, 3=all"
         required: false
         type: string
+        default: "0"
 
     outputs:
       autodoc_out:
@@ -61,14 +67,13 @@ jobs:
 
       - name: Update documentation
         id: doc_output
-        uses: nrkno/github-action-action-workflow-autodoc@93703f0104f79315f16dcb0cd285d136458b6e09 # v2
+        uses: nrkno/github-action-action-workflow-autodoc@ba51d36126ad4188605d20accd94f66ed502e0e2 # v2
         with:
           workflow_file: ${{ inputs.workflow_file }}
           doc_file: ${{ inputs.doc_file }}
           start_token: ${{ inputs.start_token }}
           end_token: ${{ inputs.end_token }}
           table: ${{ inputs.table }}
-          github_output: ${{ inputs.github_output }}
           debug: ${{ inputs.debug }}
 
       - name: Commit and push changes
