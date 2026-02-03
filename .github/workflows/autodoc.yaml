@@ -16,4 +16,3 @@ jobs:
       start_token: "<!-- start -->"
       end_token: "<!-- end -->"
       table: "true"
-      github_output: "true"
