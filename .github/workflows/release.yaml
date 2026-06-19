@@ -5,6 +5,6 @@ on:
 
 jobs:
   release:
-    uses: nrkno/github-workflow-semantic-release/.github/workflows/workflow.yaml@6130bdf606c18e7221c4235296a004d841762c66 # v4.12
+    uses: nrkno/github-workflow-semantic-release/.github/workflows/workflow.yaml@19539156fb78db20da81da4f502d433f476d3c31 # v4.13
     with:
       runs-on: ubuntu-latest
