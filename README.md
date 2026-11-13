@@ -7,18 +7,14 @@ It uses github-action [nrkno/github-action-action-workflow-autodoc](https://gith
 <!-- start -->
 ## GitHub Workflow - AutoDoc
 
-### Required Inputs
-
-|Input name|Description|Type|Default|
-|---|---|---|---|
-|**runs-on**|Runs on, e.g. ubuntu-latest. <br>make sure to enclose in single quotes `'` if using a list:<br>`'["self-hosted", "Linux"]'`<br>|string|`ubuntu-latest`|
-|**workflow_file**|Path to the workflow file to document|string|`action.yaml`|
-|**doc_file**|Path to the markdown file to update with documentation|string|`README.md`|
 
 ### Optional Inputs
 
 |Input name|Description|Type|Default|
 |---|---|---|---|
+|**runs-on**|Runner label, e.g. ubuntu-latest. A plain label, a JSON string<br>(`'"ubuntu-latest"'`) or a JSON list (`'["self-hosted", "Linux"]'`)<br>are all accepted. Enclose JSON in single quotes `'`.<br>|string|`ubuntu-latest`|
+|**workflow_file**|Path to the workflow file to document|string|`action.yaml`|
+|**doc_file**|Path to the markdown file to update with documentation|string|`README.md`|
 |**start_token**|Token marking the start of the autodoc section|string|`<!-- autodoc start -->`|
 |**end_token**|Token marking the end of the autodoc section|string|`<!-- autodoc end -->`|
 |**table**|Format inputs as a markdown table|string|`false`|
@@ -32,7 +28,7 @@ It uses github-action [nrkno/github-action-action-workflow-autodoc](https://gith
 |autodoc_out|If enabled, the generated documentation for inputs, secrets, and outputs|
 |autodoc_type|The type automaticly detected by the script of the input_file documented: workflow or action|
 
-### Simple example usage (using steps 'uses' syntax)
+### Simple example usage (job-level 'uses' syntax)
 
 ```yaml
 ---
@@ -42,17 +38,13 @@ on:
 
 jobs:
   example-job:
-    steps:
-      - name: example job
-        id: example_step
-        uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@main
-        with:
-          runs-on: 'ubuntu-latest'
-          workflow_file: 'action.yaml'
-          doc_file: 'README.md'
+    # Reusable workflows are called at job level. Pin to a full commit SHA.
+    uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@<full-commit-sha> # vX.Y.Z
+    with:
+
 ```
 
-### Full example usage (using steps 'uses' syntax)
+### Full example usage (job-level 'uses' syntax)
 
 ```yaml
 ---
@@ -62,22 +54,41 @@ on:
 
 jobs:
   example-job:
-    steps:
-      - name: example job
-        id: example_step
-        uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@main
-        with:
-          runs-on: 'ubuntu-latest'
-          workflow_file: 'action.yaml'
-          doc_file: 'README.md'
-          start_token: '<!-- autodoc start -->'
-          end_token: '<!-- autodoc end -->'
-          table: 'false'
-          debug: '0'
+    # Reusable workflows are called at job level. Pin to a full commit SHA.
+    uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@<full-commit-sha> # vX.Y.Z
+    with:
+      runs-on: 'ubuntu-latest'
+      workflow_file: 'action.yaml'
+      doc_file: 'README.md'
+      start_token: '<!-- autodoc start -->'
+      end_token: '<!-- autodoc end -->'
+      table: 'false'
+      debug: '0'
 ```
 
 
 <!-- end -->
+
+## Security model
+
+The job needs `contents: write` to push the regenerated documentation, so the
+write token is handled with care:
+
+- The branch is checked out with `persist-credentials: false`. The autodoc
+  action runs with no credentials on disk or in its environment.
+- A separate git-only step commits `doc_file` and nothing else. It fails if the
+  action changed any other file, if `doc_file` is a symlink or lies outside the
+  repository, and it never runs hooks or code from the branch.
+- Only the final push step receives the token, passed through `http.extraheader`
+  and masked. No code from the branch runs while the token is present.
+- Pull requests from forks are skipped: they have a read-only token and their
+  branch does not exist in this repository.
+
+The `autodoc_out` output contains text taken from the documented file, so treat
+it as untrusted. Never interpolate it into a `run:` script; pass it through `env:`.
+
+`runs-on` accepts a plain label (`ubuntu-latest`), a JSON string
+(`'"ubuntu-latest"'`) or a JSON list (`'["self-hosted", "Linux"]'`).
 
 ## Lockfile upkeep
 
