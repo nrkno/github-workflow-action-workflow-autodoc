@@ -3,5 +3,15 @@
   "extends": [
     "local>nrkno/nrk-bot-configs//plattform/utvikleropplevelse/renovate/renovate",
     "default:pinDigestsDisabled"
+  ],
+  "packageRules": [
+    {
+      "description": "Action bumps change what consumers execute, so they must release a patch (fix). Renovate regenerates .github/workflows/actions.lock in the same PR.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "commitMessagePrefix": "fix(deps):",
+      "semanticCommits": "disabled"
+    }
   ]
 }
