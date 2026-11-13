@@ -4,20 +4,20 @@ on:
     inputs:
       runs-on:
         description: |
-          Runs on, e.g. ubuntu-latest. 
-          make sure to enclose in single quotes `'` if using a list:
-          `'["self-hosted", "Linux"]'`
-        required: true
+          Runner label, e.g. ubuntu-latest. A plain label, a JSON string
+          (`'"ubuntu-latest"'`) or a JSON list (`'["self-hosted", "Linux"]'`)
+          are all accepted. Enclose JSON in single quotes `'`.
+        required: false
         type: string
         default: "ubuntu-latest"
       workflow_file:
         description: "Path to the workflow file to document"
-        required: true
+        required: false
         type: string
         default: "action.yaml"
       doc_file:
         description: "Path to the markdown file to update with documentation"
-        required: true
+        required: false
         type: string
         default: "README.md"
       start_token:
@@ -49,24 +49,37 @@ on:
         description: "The type automaticly detected by the script of the input_file documented: workflow or action"
         value: ${{ jobs.autodoc.outputs.autodoc_type }}
 
+# The default token is read-only; the job below opts in to what it needs.
+permissions: {}
+
 jobs:
   autodoc:
     name: Create documentation from workflow/action file
-    runs-on: ${{ fromJson(inputs.runs-on) }}
+    # A plain label, a JSON string or a JSON list. fromJson would fail on a plain label.
+    runs-on: ${{ (startsWith(inputs.runs-on, '[') || startsWith(inputs.runs-on, '"')) && fromJson(inputs.runs-on) || inputs.runs-on }}
+    # Fork PRs get a read-only token and their branch does not exist in this
+    # repository, so there is nothing to push to.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
     outputs:
       autodoc_out: ${{ toJson(steps.doc_output.outputs.autodoc_out) }}
       autodoc_type: ${{ steps.doc_output.outputs.file_type }}
     steps:
+      # Trust model: the checked-out branch is DATA ONLY. No step runs code from
+      # it while the write token is available. The token reaches exactly one
+      # step, the final push, which runs git and nothing else.
       - name: Checkout repository
-        uses: actions/checkout@v6.0.3
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.head_ref }}
-          persist-credentials: true
+          persist-credentials: false
 
+      # No credentials are on disk or in the environment here.
       - name: Update documentation
         id: doc_output
+        # TODO(bump): move to the release of nrkno/github-action-action-workflow-autodoc
+        # that builds its image from the Dockerfile (security/sweep-2026-11), then run `gh actions-lock`.
         uses: nrkno/github-action-action-workflow-autodoc@v2.2.0
         with:
           workflow_file: ${{ inputs.workflow_file }}
@@ -76,7 +89,72 @@ jobs:
           table: ${{ inputs.table }}
           debug: ${{ inputs.debug }}
 
-      - name: Commit and push changes
-        uses: stefanzweifel/git-auto-commit-action@v7.1.0
-        with:
-          commit_message: "docs(autodoc): update documentation"
+      - name: Commit documentation
+        id: commit
+        env:
+          DOC_FILE: ${{ inputs.doc_file }}
+          # Pathspecs are literal: no magic, globs or `:(top)` from file names.
+          GIT_LITERAL_PATHSPECS: "1"
+        run: |
+          # Only the documentation file may be committed. Whatever the action
+          # or the branch contains, nothing else is staged. File names are
+          # never echoed: they come from the branch and could carry newlines
+          # or `::` workflow commands.
+          doc="${DOC_FILE#./}"
+          if [[ -z "$doc" || "$doc" == /* || "$doc" == ".." || "$doc" == ../* || "$doc" == */../* || "$doc" == */.. ]]
+          then
+            echo "::error::doc_file must be a relative path inside the repository"
+            exit 1
+          fi
+          root="$(realpath -e .)"
+          if [[ ! -f "$doc" || "$(realpath -e -- "$doc")" != "${root}/${doc}" ]]
+          then
+            echo "::error::doc_file must be a regular file with no symlinked path component"
+            exit 1
+          fi
+
+          # Compare NUL-separated status entries (-z keeps odd names intact).
+          others=0
+          while IFS= read -r -d '' entry
+          do
+            [[ "${entry:3}" == "$doc" ]] || others=$((others + 1))
+          done < <(git -c core.hooksPath=/dev/null status --porcelain=v1 -z --untracked-files=all --no-renames)
+          if (( others > 0 ))
+          then
+            echo "::error::The autodoc action changed ${others} file(s) other than doc_file; refusing to commit"
+            exit 1
+          fi
+
+          if [[ -z "$(git status --porcelain=v1 -- "$doc")" ]]
+          then
+            echo "Nothing to do!"
+            exit 0
+          fi
+
+          git -c core.hooksPath=/dev/null add -- "$doc"
+          git -c core.hooksPath=/dev/null \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            -c commit.gpgsign=false \
+            commit -m "docs(autodoc): update documentation"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push documentation update
+        if: steps.commit.outputs.changed == 'true'
+        # The only step that sees the write token. It runs git and nothing else.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          # Output is discarded: the name comes from the branch and is untrusted.
+          if ! git check-ref-format --branch "$HEAD_REF" > /dev/null 2>&1
+          then
+            echo "::error::Unexpected branch name"
+            exit 1
+          fi
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null \
+            -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+            push origin "HEAD:refs/heads/${HEAD_REF}"

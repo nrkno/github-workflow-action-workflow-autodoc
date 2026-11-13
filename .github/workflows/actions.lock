@@ -8,15 +8,9 @@ workflows:
     '.github/workflows/autodoc.yaml': []
     '.github/workflows/release.yaml': []
     '.github/workflows/workflow.yaml':
-        - 'actions/checkout@v6.0.3'
+        - 'actions/checkout@v7.0.1'
         - 'nrkno/github-action-action-workflow-autodoc@v2.2.0'
-        - 'stefanzweifel/git-auto-commit-action@v7.1.0'
 dependencies:
-    'actions/checkout@v6.0.3':
-        ref: 'v6.0.3'
-        commit: 'sha1-df4cb1c069e1874edd31b4311f1884172cec0e10'
-        owner_id: 44036562
-        repo_id: 197814629
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -27,8 +21,3 @@ dependencies:
         commit: 'sha1-360cc55f9cdf5d605c04d324f6c079837cafe532'
         owner_id: 5815539
         repo_id: 1126716571
-    'stefanzweifel/git-auto-commit-action@v7.1.0':
-        ref: 'v7.1.0'
-        commit: 'sha1-04702edda442b2e678b25b537cec683a1493fcb9'
-        owner_id: 1080923
-        repo_id: 191163758
