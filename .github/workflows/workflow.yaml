@@ -79,6 +79,11 @@ jobs:
       # Trust model: the checked-out branch is DATA ONLY and this job holds no
       # write token. Anything the action does here can at most change the
       # contents of the one file that the push job later accepts.
+
+      # Start from a fresh repository: see the same step in the push job.
+      - name: Remove any previous .git
+        run: rm -rf -- "${GITHUB_WORKSPACE}/.git"
+
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
         with:
@@ -133,6 +138,17 @@ jobs:
     steps:
       # A fresh checkout of the same commit: nothing from the autodoc job's
       # workspace (.git/config, hooks, symlinks) is reused here.
+      #
+      # Persistent self-hosted runners keep the workspace between jobs, and
+      # checkout reuses an existing .git, including its config. A planted
+      # url.<x>.insteadOf, core.sshCommand or core.fsmonitor would then act on
+      # checkout's own authenticated fetch, before any check of ours could run.
+      # Removing .git first makes checkout start from a fresh repository, so
+      # nothing of the previous contents is trusted. (An allowlist of config
+      # keys checked after checkout would come too late for that fetch.)
+      - name: Remove any previous .git
+        run: rm -rf -- "${GITHUB_WORKSPACE}/.git"
+
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
         with:
@@ -203,6 +219,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DOC_FILE: ${{ inputs.doc_file }}
+          GIT_EDITOR: ":"
         run: |
           # Output is discarded: the name comes from the branch and is untrusted.
           if ! git check-ref-format --branch "$HEAD_REF" > /dev/null 2>&1
@@ -210,11 +229,73 @@ jobs:
             echo "::error::Unexpected branch name"
             exit 1
           fi
+          doc="${DOC_FILE#./}"
           auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
           echo "::add-mask::$auth"
           # An explicit URL, so no remote configured in .git/config is used.
-          # The commit is on the head SHA: if the branch moved meanwhile, this
-          # is not a fast-forward and the push fails instead of overwriting.
-          git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= \
-            -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic ${auth}" \
-            push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${HEAD_REF}"
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          # Every git command: no hooks, no fsmonitor, no credential helper
+          # (system and user config are already ignored by the job env).
+          git_h() {
+            git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic ${auth}" "$@"
+          }
+
+          # The commit sits on the head SHA. Callers can run this workflow
+          # more than once per pull request (for example one call per
+          # documented file), so another call may push first. A rejected push
+          # is then retried, at most 3 times, by replaying only this commit
+          # on the new branch tip. The artifact is NOT copied again: the
+          # replay is a normal three-way merge, so edits to other parts of
+          # doc_file survive and a real conflict fails the job.
+          base="$HEAD_SHA"
+          retries=0
+          until git_h push "$url" "HEAD:refs/heads/${HEAD_REF}"
+          do
+            if (( retries >= 3 ))
+            then
+              echo "::error::The push was still rejected after 3 rebases"
+              exit 1
+            fi
+            retries=$((retries + 1))
+            echo "::warning::Push rejected, rebasing onto the new branch tip (attempt ${retries} of 3)"
+
+            git_h fetch --no-tags "$url" "refs/heads/${HEAD_REF}"
+            tip="$(git rev-parse --verify "FETCH_HEAD^{commit}")"
+            if [[ "$tip" == "$base" ]]
+            then
+              echo "::error::The push was rejected but the branch has not moved"
+              exit 1
+            fi
+            # Only a branch that kept the head SHA in its history, and that
+            # changed nothing but doc_file since, may be rebased onto. Anything
+            # else (force-push, new commits to other files) means the
+            # documentation is stale: fail, and the next run regenerates it.
+            if ! git merge-base --is-ancestor "$HEAD_SHA" "$tip"
+            then
+              echo "::error::The branch no longer contains the commit this run documented"
+              exit 1
+            fi
+            others=0
+            while IFS= read -r -d '' changed
+            do
+              [[ "$changed" == "$doc" ]] || others=$((others + 1))
+            done < <(git diff --name-only -z --no-renames "$HEAD_SHA" "$tip")
+            if (( others > 0 ))
+            then
+              echo "::error::The branch changed ${others} file(s) other than doc_file since this run started"
+              exit 1
+            fi
+
+            if ! git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+              -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              -c commit.gpgsign=false \
+              rebase --onto "$tip" "$base"
+            then
+              git -c core.hooksPath=/dev/null -c core.fsmonitor=false rebase --abort || true
+              echo "::error::Rebasing the documentation commit onto the new branch tip conflicted"
+              exit 1
+            fi
+            base="$tip"
+          done
