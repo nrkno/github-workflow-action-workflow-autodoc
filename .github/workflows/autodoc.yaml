@@ -10,6 +10,14 @@ jobs:
     name: Auto-generated workflow documentation
     permissions:
       contents: write
+    # Off until the action bump (see the TODO(bump) on the action step in
+    # workflow.yaml). The pinned action v2.2.0 still renders the old README
+    # templates, so running it here would commit a revert of the regenerated
+    # README on every PR. Set the repository variable AUTODOC_SELFTEST to
+    # `true` to run it anyway.
+    # TODO(bump): once workflow.yaml uses the action release built from its
+    # Dockerfile, delete this `if:` so the local workflow is self-tested again.
+    if: vars.AUTODOC_SELFTEST == 'true'
     # Run the workflow from this checkout, so a change to it is tested before release.
     uses: ./.github/workflows/workflow.yaml
     with:
