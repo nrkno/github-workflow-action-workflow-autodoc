@@ -38,10 +38,11 @@ on:
 
 jobs:
   example-job:
+    # The called workflow pushes the result, so the job must grant this.
+    permissions:
+      contents: write
     # Reusable workflows are called at job level. Pin to a full commit SHA.
     uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@<full-commit-sha> # vX.Y.Z
-    with:
-
 ```
 
 ### Full example usage (job-level 'uses' syntax)
@@ -54,6 +55,9 @@ on:
 
 jobs:
   example-job:
+    # The called workflow pushes the result, so the job must grant this.
+    permissions:
+      contents: write
     # Reusable workflows are called at job level. Pin to a full commit SHA.
     uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@<full-commit-sha> # vX.Y.Z
     with:
@@ -71,24 +75,45 @@ jobs:
 
 ## Security model
 
-The job needs `contents: write` to push the regenerated documentation, so the
-write token is handled with care:
+The documentation has to be pushed back to the branch, which needs a write
+token. A container action can write `GITHUB_ENV`, `GITHUB_PATH` and the
+workspace (including `.git/config`), and so can run code in, or redirect, any
+later step of its own job. The workflow therefore uses two jobs:
 
-- The branch is checked out with `persist-credentials: false`. The autodoc
-  action runs with no credentials on disk or in its environment.
-- A separate git-only step commits `doc_file` and nothing else. It fails if the
-  action changed any other file, if `doc_file` is a symlink or lies outside the
-  repository, and it never runs hooks or code from the branch.
-- Only the final push step receives the token, passed through `http.extraheader`
-  and masked. No code from the branch runs while the token is present.
-- Pull requests from forks are skipped: they have a read-only token and their
-  branch does not exist in this repository.
+- **`autodoc`** has `contents: read`. It checks out the PR head with
+  `persist-credentials: false`, runs the action and uploads `doc_file` as an
+  artifact. It never sees a write token.
+- **`push`** has `contents: write`. It makes a fresh checkout of the same
+  commit, downloads the artifact and requires it to be exactly one regular file
+  (no links, directories or extra files, at most 10 MiB). It copies that file
+  over `doc_file` (which must be a regular file with no symlinked path
+  component), commits it with hooks and fsmonitor disabled and system and user
+  git configuration ignored, and pushes to an explicit URL. Only that last step
+  receives the token, through a masked `http.extraheader`. No code from the
+  branch or from the action runs in this job.
+
+Callers must grant `contents: write`, as before. The push is a fast-forward
+from the checked-out commit, so it fails, instead of overwriting, if the branch
+moved while the workflow ran. Pull requests from forks are skipped: they have a
+read-only token and their branch does not exist in this repository.
+
+What a compromised action can still do is limit its damage to the content of
+`doc_file`.
 
 The `autodoc_out` output contains text taken from the documented file, so treat
 it as untrusted. Never interpolate it into a `run:` script; pass it through `env:`.
 
 `runs-on` accepts a plain label (`ubuntu-latest`), a JSON string
-(`'"ubuntu-latest"'`) or a JSON list (`'["self-hosted", "Linux"]'`).
+(`'"ubuntu-latest"'`), a JSON list (`'["self-hosted", "Linux"]'`) or a JSON
+object (`'{"group": "g"}'`), with optional leading whitespace.
+
+## Self-test
+
+`.github/workflows/autodoc.yaml` documents this repository with the local
+workflow, but only when the repository variable `AUTODOC_SELFTEST` is `true`.
+Until the `TODO(bump)` on the action step in `workflow.yaml` is done, the pinned
+action still renders the old README templates and would revert the regenerated
+README on every pull request. Remove the `if:` with the bump.
 
 ## Lockfile upkeep
 
