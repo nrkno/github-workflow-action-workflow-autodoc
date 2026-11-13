@@ -92,10 +92,23 @@ later step of its own job. The workflow therefore uses two jobs:
   receives the token, through a masked `http.extraheader`. No code from the
   branch or from the action runs in this job.
 
-Callers must grant `contents: write`, as before. The push is a fast-forward
-from the checked-out commit, so it fails, instead of overwriting, if the branch
-moved while the workflow ran. Pull requests from forks are skipped: they have a
-read-only token and their branch does not exist in this repository.
+Callers must grant `contents: write`, as before. The commit sits on the head
+SHA of the pull request. A caller may run this workflow more than once per pull
+request (plattform-terraform documents a plan and an apply workflow into one
+README), so another run may push first. A rejected push is retried at most 3
+times: the job fetches the branch tip, requires that it still contains the head
+SHA and that only `doc_file` changed since, and replays its own commit on the tip
+with `git rebase --onto`. The artifact is not copied again, so edits made by the
+other run to other parts of `doc_file` are kept. If the branch was force-pushed,
+changed another file, or the replay conflicts, the job fails instead and the
+next run regenerates the documentation. Pull requests from forks are skipped:
+they have a read-only token and their branch does not exist in this repository.
+
+Both jobs start by deleting any `.git` left in the workspace. Persistent
+self-hosted runners keep workspaces between jobs, and checkout would otherwise
+reuse a planted `.git/config` (`url.<x>.pushInsteadOf`, `core.sshCommand`,
+`core.fsmonitor`) for its own authenticated git commands. Git system and user
+configuration is ignored in the push job.
 
 What a compromised action can still do is limit its damage to the content of
 `doc_file`.
