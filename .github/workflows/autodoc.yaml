@@ -1,5 +1,6 @@
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # The default token is read-only; the job below opts in to what it needs.
@@ -16,8 +17,9 @@ jobs:
     # README on every PR. Set the repository variable AUTODOC_SELFTEST to
     # `true` to run it anyway.
     # TODO(bump): once workflow.yaml uses the action release built from its
-    # Dockerfile, delete this `if:` so the local workflow is self-tested again.
-    if: vars.AUTODOC_SELFTEST == 'true'
+    # Dockerfile, remove the variable check so the local workflow is self-tested again.
+    # Draft PRs must never run the branch-mutating self-test.
+    if: vars.AUTODOC_SELFTEST == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     # Run the workflow from this checkout, so a change to it is tested before release.
     uses: ./.github/workflows/workflow.yaml
     with:

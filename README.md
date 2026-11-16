@@ -123,10 +123,12 @@ object (`'{"group": "g"}'`), with optional leading whitespace.
 ## Self-test
 
 `.github/workflows/autodoc.yaml` documents this repository with the local
-workflow, but only when the repository variable `AUTODOC_SELFTEST` is `true`.
+workflow, but only when the `AUTODOC_SELFTEST` variable is `true`. It skips
+draft pull requests and is triggered when a pull request is marked ready for review.
 Until the `TODO(bump)` on the action step in `workflow.yaml` is done, the pinned
 action still renders the old README templates and would revert the regenerated
-README on every pull request. Remove the `if:` with the bump.
+README on every pull request. Remove the variable check with the bump; retain
+the draft guard.
 
 ## Lockfile upkeep
 
