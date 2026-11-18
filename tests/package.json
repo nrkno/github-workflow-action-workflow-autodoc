@@ -1,0 +1,7 @@
+{
+  "name": "autodoc-workflow-regressions",
+  "private": true,
+  "devDependencies": {
+    "@actions/expressions": "0.3.61"
+  }
+}

@@ -1,18 +1,27 @@
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
-permissions:
-  contents: write
+# The job below opts in to the token permissions it needs.
+permissions: {}
 
 jobs:
   autodoc:
     name: Auto-generated workflow documentation
-    uses: nrkno/github-workflow-action-workflow-autodoc/.github/workflows/workflow.yaml@84a54022b61e892fcc09d945795771d2d3822ad7 # v1
+    permissions:
+      contents: write
+    # Keep off while v2.2.0 is locked: it renders the old README templates.
+    # TODO(bump): once the hardened release is locked and the README canary
+    # passes, remove the variable check to restore the local self-test.
+    # Draft PRs must never run the branch-mutating self-test.
+    if: vars.AUTODOC_SELFTEST == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
+    # Run the workflow from this checkout, so a change to it is tested before release.
+    uses: ./.github/workflows/workflow.yaml
     with:
-      runs-on: '"ubuntu-latest"'
       workflow_file: .github/workflows/workflow.yaml
       doc_file: README.md
       start_token: "<!-- start -->"
       end_token: "<!-- end -->"
-      table: "true"
+      # An expression: actionlint mistakes a literal 'true' for a boolean.
+      table: ${{ 'true' }}

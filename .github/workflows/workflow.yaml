@@ -4,20 +4,20 @@ on:
     inputs:
       runs-on:
         description: |
-          Runs on, e.g. ubuntu-latest. 
-          make sure to enclose in single quotes `'` if using a list:
-          `'["self-hosted", "Linux"]'`
-        required: true
+          An unpadded runner label such as ubuntu-latest, or a JSON string
+          (`'"ubuntu-latest"'`), list (`'["self-hosted", "Linux"]'`) or object
+          (`'{"group": "g"}'`). Enclose JSON in single quotes `'`.
+        required: false
         type: string
         default: "ubuntu-latest"
       workflow_file:
         description: "Path to the workflow file to document"
-        required: true
+        required: false
         type: string
         default: "action.yaml"
       doc_file:
         description: "Path to the markdown file to update with documentation"
-        required: true
+        required: false
         type: string
         default: "README.md"
       start_token:
@@ -49,25 +49,94 @@ on:
         description: "The type automaticly detected by the script of the input_file documented: workflow or action"
         value: ${{ jobs.autodoc.outputs.autodoc_type }}
 
+# Each job opts in to the token permissions it needs.
+permissions: {}
+
+# Two jobs, so the write token never shares a job with the autodoc container.
+# A container action can write GITHUB_ENV, GITHUB_PATH and the workspace
+# (including .git/config), which would let it run code in, or redirect, every
+# later step of the same job.
+#
+#   autodoc  contents: read. Runs the action and uploads a copy of doc_file.
+#   push     contents: write. Fresh checkout, verifies the artifact is exactly
+#            one regular file, copies it to doc_file, commits and pushes.
 jobs:
   autodoc:
     name: Create documentation from workflow/action file
-    runs-on: ${{ fromJson(inputs.runs-on) }}
+    # Select the nonempty JSON text, not the decoded value: an empty JSON
+    # string must not turn back into a literal label containing quotes.
+    runs-on: &runner >-
+      ${{ fromJSON(
+        (startsWith(inputs.runs-on, '[') || startsWith(inputs.runs-on, '"') ||
+         startsWith(inputs.runs-on, '{') || startsWith(inputs.runs-on, ' ') ||
+         startsWith(inputs.runs-on, fromJSON('"\t"')) ||
+         startsWith(inputs.runs-on, fromJSON('"\n"')) ||
+         startsWith(inputs.runs-on, fromJSON('"\r"')))
+        && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    # Only PRs with a verified same-repository head can reach the write job.
+    # The event-name check also covers missing PR payloads.
+    if: >-
+      ${{ (!startsWith(github.event_name, 'pull_request') && !github.event.pull_request)
+          || (github.repository != '' && github.event.pull_request.head.repo.full_name == github.repository) }}
     permissions:
-      contents: write
+      contents: read
     outputs:
       autodoc_out: ${{ toJson(steps.doc_output.outputs.autodoc_out) }}
       autodoc_type: ${{ steps.doc_output.outputs.file_type }}
+      artifact: ${{ steps.artifact.outputs.name }}
     steps:
+      # Trust model: the checked-out branch is DATA ONLY and this job holds no
+      # write token. Anything the action does here can at most change the
+      # contents of the one file that the push job later accepts.
+
+      # Start from a fresh repository: see the same step in the push job.
+      - name: Remove any previous .git
+        run: rm -rf -- "${GITHUB_WORKSPACE}/.git"
+
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ github.head_ref }}
-          persist-credentials: true
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - &validate_doc_file
+        name: Validate documentation path
+        shell: bash
+        env:
+          DOC_FILE: ${{ inputs.doc_file }}
+        run: |
+          case "$DOC_FILE" in
+            ''|/*|..|../*|*/../*|*/..)
+              echo "::error::doc_file must be a relative path inside the repository without '..' components"
+              exit 1
+              ;;
+          esac
+          # Compare the normalized spelling with the resolved path. NUL
+          # delimiting preserves literal file names, including newlines.
+          if ! IFS= read -r -d '' literal < <(realpath -msz --relative-to=. -- "$DOC_FILE") ||
+             [[ "$literal" == .git || "$literal" == .git/* ]] ||
+             [[ ! -f "$DOC_FILE" ]] ||
+             ! IFS= read -r -d '' resolved < <(realpath -ez --relative-to=. -- "$DOC_FILE") ||
+             [[ "$literal" != "$resolved" ]]
+          then
+            echo "::error::doc_file must be an existing regular file without symlinked components or a path inside .git"
+            exit 1
+          fi
+
+      # Chosen before the action runs. A random suffix keeps several calls of
+      # this workflow in one run (for example two jobs documenting README.md)
+      # from colliding on the artifact name.
+      - name: Choose artifact name
+        id: artifact
+        run: |
+          suffix="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "name=autodoc-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${suffix}" >> "$GITHUB_OUTPUT"
 
       - name: Update documentation
         id: doc_output
-        uses: nrkno/github-action-action-workflow-autodoc@360cc55f9cdf5d605c04d324f6c079837cafe532 # v2
+        # TODO(bump): use the published hardened release from
+        # nrkno/github-action-action-workflow-autodoc#57 and regenerate the lockfile.
+        uses: nrkno/github-action-action-workflow-autodoc@v2.2.0
         with:
           workflow_file: ${{ inputs.workflow_file }}
           doc_file: ${{ inputs.doc_file }}
@@ -76,7 +145,208 @@ jobs:
           table: ${{ inputs.table }}
           debug: ${{ inputs.debug }}
 
-      - name: Commit and push changes
-        uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7
+      # Recheck after the action writes the file. Upload a fixed, visible
+      # name so upload-artifact never interprets doc_file as a glob or skips
+      # it because the caller deliberately chose a hidden path.
+      - *validate_doc_file
+
+      - name: Stage documentation
+        id: stage
+        shell: bash
+        env:
+          DOC_FILE: ${{ inputs.doc_file }}
+        run: |
+          staging="$(mktemp -d -- "${RUNNER_TEMP}/autodoc-upload.XXXXXXXX")"
+          cp --no-preserve=mode,ownership -- "$DOC_FILE" "$staging/documentation.md"
+          printf 'path=%s\n' "$staging/documentation.md" >> "$GITHUB_OUTPUT"
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v7.0.2
         with:
-          commit_message: "docs(autodoc): update documentation"
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.stage.outputs.path }}
+          if-no-files-found: error
+          retention-days: 1
+
+  push:
+    name: Commit and push documentation
+    needs: autodoc
+    runs-on: *runner
+    if: needs.autodoc.result == 'success'
+    permissions:
+      contents: write
+    env:
+      # Ignore system and user git configuration; hooks and fsmonitor are also
+      # switched off on every command below.
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_CONFIG_GLOBAL: /dev/null
+      # Pathspecs are literal: no magic, globs or `:(top)` from file names.
+      GIT_LITERAL_PATHSPECS: "1"
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      # A fresh checkout of the same commit: nothing from the autodoc job's
+      # workspace (.git/config, hooks, symlinks) is reused here.
+      #
+      # Persistent self-hosted runners keep the workspace between jobs, and
+      # checkout reuses an existing .git, including its config. A planted
+      # url.<x>.insteadOf, core.sshCommand or core.fsmonitor would then act on
+      # checkout's own authenticated fetch, before any check of ours could run.
+      # Removing .git first makes checkout start from a fresh repository, so
+      # nothing of the previous contents is trusted. (An allowlist of config
+      # keys checked after checkout would come too late for that fetch.)
+      - name: Remove any previous .git
+        run: rm -rf -- "${GITHUB_WORKSPACE}/.git"
+
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prepare download directory
+        id: download_dir
+        shell: bash
+        run: |
+          destination="$(mktemp -d -- "${RUNNER_TEMP}/autodoc-download.XXXXXXXX")"
+          printf 'path=%s\n' "$destination" >> "$GITHUB_OUTPUT"
+
+      - name: Download documentation
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: ${{ needs.autodoc.outputs.artifact }}
+          path: ${{ steps.download_dir.outputs.path }}
+
+      - *validate_doc_file
+
+      - name: Commit documentation
+        id: commit
+        shell: bash
+        env:
+          DOC_FILE: ${{ inputs.doc_file }}
+          ARTIFACT_DIR: ${{ steps.download_dir.outputs.path }}
+        run: |
+          src="$ARTIFACT_DIR/documentation.md"
+          if [[ -L "$ARTIFACT_DIR" || ! -d "$ARTIFACT_DIR" || -L "$src" || ! -f "$src" ]] ||
+             ! entries="$(find -P "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -printf x)" ||
+             [[ "$entries" != x ]]
+          then
+            echo "::error::The documentation artifact must contain only the regular file documentation.md"
+            exit 1
+          fi
+          size="$(stat -c %s -- "$src")"
+          if (( size > 10485760 ))
+          then
+            echo "::error::The documentation artifact is larger than 10 MiB"
+            exit 1
+          fi
+
+          cp --no-preserve=mode,ownership -- "$src" "$DOC_FILE"
+
+          status="$(git -c core.fsmonitor=false status --porcelain=v1 -- "$DOC_FILE")"
+          if [[ -z "$status" ]]
+          then
+            echo "Nothing to do!"
+            exit 0
+          fi
+
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -- "$DOC_FILE"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+            -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            -c commit.gpgsign=false \
+            commit -m "docs(autodoc): update documentation"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push documentation update
+        if: steps.commit.outputs.changed == 'true'
+        shell: bash
+        # Pass the write token explicitly to Git only in this step.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          DOC_FILE: ${{ inputs.doc_file }}
+          GIT_EDITOR: ":"
+        run: |
+          # Output is discarded: the name comes from the branch and is untrusted.
+          if ! git check-ref-format --branch "$HEAD_REF" > /dev/null 2>&1
+          then
+            echo "::error::Unexpected branch name"
+            exit 1
+          fi
+          # Use Git's normalized relative spelling for comparisons to the diff.
+          IFS= read -r -d '' doc < <(realpath -ez --relative-to=. -- "$DOC_FILE")
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          # An explicit URL, so no remote configured in .git/config is used.
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          # Every git command: no hooks, no fsmonitor, no credential helper
+          # (system and user config are already ignored by the job env).
+          git_h() {
+            git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= \
+              -c "http.${GITHUB_SERVER_URL}/.extraheader=AUTHORIZATION: basic ${auth}" "$@"
+          }
+
+          # The commit sits on the head SHA. Callers can run this workflow
+          # more than once per pull request (for example one call per
+          # documented file), so another call may push first. A rejected push
+          # is then retried, at most 3 times, by replaying only this commit
+          # on the new branch tip. The artifact is NOT copied again: the
+          # replay is a normal three-way merge, so edits to other parts of
+          # doc_file survive and a real conflict fails the job.
+          base="$HEAD_SHA"
+          retries=0
+          until git_h push "$url" "HEAD:refs/heads/${HEAD_REF}"
+          do
+            if (( retries >= 3 ))
+            then
+              echo "::error::The push was still rejected after 3 rebases"
+              exit 1
+            fi
+            retries=$((retries + 1))
+            echo "::warning::Push rejected, rebasing onto the new branch tip (attempt ${retries} of 3)"
+
+            git_h fetch --no-tags "$url" "refs/heads/${HEAD_REF}"
+            tip="$(git rev-parse --verify "FETCH_HEAD^{commit}")"
+            if [[ "$tip" == "$base" ]]
+            then
+              echo "::error::The push was rejected but the branch has not moved"
+              exit 1
+            fi
+            # Only a branch that kept the head SHA in its history, and that
+            # changed nothing but doc_file since, may be rebased onto. Anything
+            # else (force-push, new commits to other files) means the
+            # documentation is stale: fail, and the next run regenerates it.
+            if ! git merge-base --is-ancestor "$HEAD_SHA" "$tip"
+            then
+              echo "::error::The branch no longer contains the commit this run documented"
+              exit 1
+            fi
+            # Exclude exactly this repository-relative literal path. A diff
+            # error must not be mistaken for an empty diff.
+            if GIT_LITERAL_PATHSPECS=0 git diff --quiet --no-ext-diff --no-renames --ignore-submodules=none \
+              "$HEAD_SHA" "$tip" -- ":(top,exclude,literal)$doc"
+            then
+              :
+            else
+              if [[ "$?" == 1 ]]
+              then
+                echo "::error::The branch changed files other than doc_file since this run started"
+              else
+                echo "::error::Could not check which files changed since this run started"
+              fi
+              exit 1
+            fi
+
+            if ! git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+              -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              -c commit.gpgsign=false \
+              rebase --onto "$tip" "$base"
+            then
+              git -c core.hooksPath=/dev/null -c core.fsmonitor=false rebase --abort || true
+              echo "::error::Rebasing the documentation commit onto the new branch tip conflicted"
+              exit 1
+            fi
+            base="$tip"
+          done
