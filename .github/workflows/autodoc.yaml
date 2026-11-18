@@ -3,7 +3,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
-# The default token is read-only; the job below opts in to what it needs.
+# The job below opts in to the token permissions it needs.
 permissions: {}
 
 jobs:
@@ -11,13 +11,9 @@ jobs:
     name: Auto-generated workflow documentation
     permissions:
       contents: write
-    # Off until the action bump (see the TODO(bump) on the action step in
-    # workflow.yaml). The pinned action v2.2.0 still renders the old README
-    # templates, so running it here would commit a revert of the regenerated
-    # README on every PR. Set the repository variable AUTODOC_SELFTEST to
-    # `true` to run it anyway.
-    # TODO(bump): once workflow.yaml uses the action release built from its
-    # Dockerfile, remove the variable check so the local workflow is self-tested again.
+    # Keep off while v2.2.0 is locked: it renders the old README templates.
+    # TODO(bump): once the hardened release is locked and the README canary
+    # passes, remove the variable check to restore the local self-test.
     # Draft PRs must never run the branch-mutating self-test.
     if: vars.AUTODOC_SELFTEST == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     # Run the workflow from this checkout, so a change to it is tested before release.

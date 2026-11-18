@@ -4,9 +4,9 @@ on:
     inputs:
       runs-on:
         description: |
-          Runner label, e.g. ubuntu-latest. A plain label, a JSON string
-          (`'"ubuntu-latest"'`) or a JSON list (`'["self-hosted", "Linux"]'`)
-          are all accepted. Enclose JSON in single quotes `'`.
+          An unpadded runner label such as ubuntu-latest, or a JSON string
+          (`'"ubuntu-latest"'`), list (`'["self-hosted", "Linux"]'`) or object
+          (`'{"group": "g"}'`). Enclose JSON in single quotes `'`.
         required: false
         type: string
         default: "ubuntu-latest"
@@ -49,7 +49,7 @@ on:
         description: "The type automaticly detected by the script of the input_file documented: workflow or action"
         value: ${{ jobs.autodoc.outputs.autodoc_type }}
 
-# The default token is read-only; each job below opts in to what it needs.
+# Each job opts in to the token permissions it needs.
 permissions: {}
 
 # Two jobs, so the write token never shares a job with the autodoc container.
@@ -57,18 +57,27 @@ permissions: {}
 # (including .git/config), which would let it run code in, or redirect, every
 # later step of the same job.
 #
-#   autodoc  contents: read. Runs the action and uploads doc_file as an artifact.
+#   autodoc  contents: read. Runs the action and uploads a copy of doc_file.
 #   push     contents: write. Fresh checkout, verifies the artifact is exactly
 #            one regular file, copies it to doc_file, commits and pushes.
 jobs:
   autodoc:
     name: Create documentation from workflow/action file
-    # A plain label, a JSON string, a JSON list or a JSON object, with optional
-    # leading whitespace. fromJson would fail on a plain label.
-    runs-on: ${{ (startsWith(inputs.runs-on, '[') || startsWith(inputs.runs-on, '"') || startsWith(inputs.runs-on, '{') || startsWith(inputs.runs-on, ' ') || startsWith(inputs.runs-on, fromJson('"\t"')) || startsWith(inputs.runs-on, fromJson('"\n"')) || startsWith(inputs.runs-on, fromJson('"\r"'))) && fromJson(inputs.runs-on) || inputs.runs-on }}
-    # Fork PRs get a read-only token and their branch does not exist in this
-    # repository, so there is nothing to push to.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Select the nonempty JSON text, not the decoded value: an empty JSON
+    # string must not turn back into a literal label containing quotes.
+    runs-on: &runner >-
+      ${{ fromJSON(
+        (startsWith(inputs.runs-on, '[') || startsWith(inputs.runs-on, '"') ||
+         startsWith(inputs.runs-on, '{') || startsWith(inputs.runs-on, ' ') ||
+         startsWith(inputs.runs-on, fromJSON('"\t"')) ||
+         startsWith(inputs.runs-on, fromJSON('"\n"')) ||
+         startsWith(inputs.runs-on, fromJSON('"\r"')))
+        && inputs.runs-on || toJSON(inputs.runs-on)) }}
+    # Only PRs with a verified same-repository head can reach the write job.
+    # The event-name check also covers missing PR payloads.
+    if: >-
+      ${{ (!startsWith(github.event_name, 'pull_request') && !github.event.pull_request)
+          || (github.repository != '' && github.event.pull_request.head.repo.full_name == github.repository) }}
     permissions:
       contents: read
     outputs:
@@ -90,6 +99,30 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - &validate_doc_file
+        name: Validate documentation path
+        shell: bash
+        env:
+          DOC_FILE: ${{ inputs.doc_file }}
+        run: |
+          case "$DOC_FILE" in
+            ''|/*|..|../*|*/../*|*/..)
+              echo "::error::doc_file must be a relative path inside the repository without '..' components"
+              exit 1
+              ;;
+          esac
+          # Compare the normalized spelling with the resolved path. NUL
+          # delimiting preserves literal file names, including newlines.
+          if ! IFS= read -r -d '' literal < <(realpath -msz --relative-to=. -- "$DOC_FILE") ||
+             [[ "$literal" == .git || "$literal" == .git/* ]] ||
+             [[ ! -f "$DOC_FILE" ]] ||
+             ! IFS= read -r -d '' resolved < <(realpath -ez --relative-to=. -- "$DOC_FILE") ||
+             [[ "$literal" != "$resolved" ]]
+          then
+            echo "::error::doc_file must be an existing regular file without symlinked components or a path inside .git"
+            exit 1
+          fi
+
       # Chosen before the action runs. A random suffix keeps several calls of
       # this workflow in one run (for example two jobs documenting README.md)
       # from colliding on the artifact name.
@@ -101,8 +134,8 @@ jobs:
 
       - name: Update documentation
         id: doc_output
-        # TODO(bump): move to the release of nrkno/github-action-action-workflow-autodoc
-        # that builds its image from the Dockerfile (security/sweep-2026-11), then run `gh actions-lock`.
+        # TODO(bump): use the published hardened release from
+        # nrkno/github-action-action-workflow-autodoc#57 and regenerate the lockfile.
         uses: nrkno/github-action-action-workflow-autodoc@v2.2.0
         with:
           workflow_file: ${{ inputs.workflow_file }}
@@ -112,18 +145,33 @@ jobs:
           table: ${{ inputs.table }}
           debug: ${{ inputs.debug }}
 
+      # Recheck after the action writes the file. Upload a fixed, visible
+      # name so upload-artifact never interprets doc_file as a glob or skips
+      # it because the caller deliberately chose a hidden path.
+      - *validate_doc_file
+
+      - name: Stage documentation
+        id: stage
+        shell: bash
+        env:
+          DOC_FILE: ${{ inputs.doc_file }}
+        run: |
+          staging="$(mktemp -d -- "${RUNNER_TEMP}/autodoc-upload.XXXXXXXX")"
+          cp --no-preserve=mode,ownership -- "$DOC_FILE" "$staging/documentation.md"
+          printf 'path=%s\n' "$staging/documentation.md" >> "$GITHUB_OUTPUT"
+
       - name: Upload documentation
         uses: actions/upload-artifact@v7.0.2
         with:
           name: ${{ steps.artifact.outputs.name }}
-          path: ${{ inputs.doc_file }}
+          path: ${{ steps.stage.outputs.path }}
           if-no-files-found: error
           retention-days: 1
 
   push:
     name: Commit and push documentation
     needs: autodoc
-    runs-on: ${{ (startsWith(inputs.runs-on, '[') || startsWith(inputs.runs-on, '"') || startsWith(inputs.runs-on, '{') || startsWith(inputs.runs-on, ' ') || startsWith(inputs.runs-on, fromJson('"\t"')) || startsWith(inputs.runs-on, fromJson('"\n"')) || startsWith(inputs.runs-on, fromJson('"\r"'))) && fromJson(inputs.runs-on) || inputs.runs-on }}
+    runs-on: *runner
     if: needs.autodoc.result == 'success'
     permissions:
       contents: write
@@ -155,57 +203,53 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: Prepare download directory
+        id: download_dir
+        shell: bash
+        run: |
+          destination="$(mktemp -d -- "${RUNNER_TEMP}/autodoc-download.XXXXXXXX")"
+          printf 'path=%s\n' "$destination" >> "$GITHUB_OUTPUT"
+
       - name: Download documentation
         uses: actions/download-artifact@v8.0.2
         with:
           name: ${{ needs.autodoc.outputs.artifact }}
-          path: ${{ runner.temp }}/autodoc-artifact
+          path: ${{ steps.download_dir.outputs.path }}
+
+      - *validate_doc_file
 
       - name: Commit documentation
         id: commit
+        shell: bash
         env:
           DOC_FILE: ${{ inputs.doc_file }}
-          ARTIFACT_DIR: ${{ runner.temp }}/autodoc-artifact
+          ARTIFACT_DIR: ${{ steps.download_dir.outputs.path }}
         run: |
-          # File names are never echoed: they come from the branch or the
-          # artifact and could carry newlines or `::` workflow commands.
-          doc="${DOC_FILE#./}"
-          if [[ -z "$doc" || "$doc" == /* || "$doc" == ".." || "$doc" == ../* || "$doc" == */../* || "$doc" == */.. ]]
+          src="$ARTIFACT_DIR/documentation.md"
+          if [[ -L "$ARTIFACT_DIR" || ! -d "$ARTIFACT_DIR" || -L "$src" || ! -f "$src" ]] ||
+             ! entries="$(find -P "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -printf x)" ||
+             [[ "$entries" != x ]]
           then
-            echo "::error::doc_file must be a relative path inside the repository"
+            echo "::error::The documentation artifact must contain only the regular file documentation.md"
             exit 1
           fi
-          root="$(realpath -e .)"
-          if [[ ! -f "$doc" || "$(realpath -e -- "$doc")" != "${root}/${doc}" ]]
-          then
-            echo "::error::doc_file must be a regular file with no symlinked path component"
-            exit 1
-          fi
-
-          # The artifact must hold exactly one entry, and it must be a regular
-          # file (find -P does not follow links and reports them as type l).
-          mapfile -d '' -t kinds < <(find -P "$ARTIFACT_DIR" -mindepth 1 -printf '%y\0')
-          if (( ${#kinds[@]} != 1 )) || [[ "${kinds[0]}" != "f" ]]
-          then
-            echo "::error::The documentation artifact must be exactly one regular file"
-            exit 1
-          fi
-          IFS= read -r -d '' src < <(find -P "$ARTIFACT_DIR" -mindepth 1 -type f -print0)
-          if (( "$(stat -c %s -- "$src")" > 10485760 ))
+          size="$(stat -c %s -- "$src")"
+          if (( size > 10485760 ))
           then
             echo "::error::The documentation artifact is larger than 10 MiB"
             exit 1
           fi
 
-          cp --no-preserve=mode,ownership -- "$src" "$doc"
+          cp --no-preserve=mode,ownership -- "$src" "$DOC_FILE"
 
-          if [[ -z "$(git -c core.fsmonitor=false status --porcelain=v1 -- "$doc")" ]]
+          status="$(git -c core.fsmonitor=false status --porcelain=v1 -- "$DOC_FILE")"
+          if [[ -z "$status" ]]
           then
             echo "Nothing to do!"
             exit 0
           fi
 
-          git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -- "$doc"
+          git -c core.hooksPath=/dev/null -c core.fsmonitor=false add -- "$DOC_FILE"
           git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
             -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
@@ -215,7 +259,8 @@ jobs:
 
       - name: Push documentation update
         if: steps.commit.outputs.changed == 'true'
-        # The only step that sees the write token. It runs git and nothing else.
+        shell: bash
+        # Pass the write token explicitly to Git only in this step.
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.head_ref || github.ref_name }}
@@ -229,7 +274,8 @@ jobs:
             echo "::error::Unexpected branch name"
             exit 1
           fi
-          doc="${DOC_FILE#./}"
+          # Use Git's normalized relative spelling for comparisons to the diff.
+          IFS= read -r -d '' doc < <(realpath -ez --relative-to=. -- "$DOC_FILE")
           auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
           echo "::add-mask::$auth"
           # An explicit URL, so no remote configured in .git/config is used.
@@ -276,14 +322,19 @@ jobs:
               echo "::error::The branch no longer contains the commit this run documented"
               exit 1
             fi
-            others=0
-            while IFS= read -r -d '' changed
-            do
-              [[ "$changed" == "$doc" ]] || others=$((others + 1))
-            done < <(git diff --name-only -z --no-renames "$HEAD_SHA" "$tip")
-            if (( others > 0 ))
+            # Exclude exactly this repository-relative literal path. A diff
+            # error must not be mistaken for an empty diff.
+            if GIT_LITERAL_PATHSPECS=0 git diff --quiet --no-ext-diff --no-renames --ignore-submodules=none \
+              "$HEAD_SHA" "$tip" -- ":(top,exclude,literal)$doc"
             then
-              echo "::error::The branch changed ${others} file(s) other than doc_file since this run started"
+              :
+            else
+              if [[ "$?" == 1 ]]
+              then
+                echo "::error::The branch changed files other than doc_file since this run started"
+              else
+                echo "::error::Could not check which files changed since this run started"
+              fi
               exit 1
             fi
 
