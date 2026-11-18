@@ -98,18 +98,19 @@ later step of its own job. The workflow therefore uses two jobs:
 the checkout, with no `..` components or symbolic links in the path. Git
 metadata under `.git` is not a documentation target.
 
-Callers must grant `contents: write`, as before. The commit sits on the head
-SHA of the pull request. A caller may run this workflow more than once per pull
-request (plattform-terraform documents a plan and an apply workflow into one
-README), so another run may push first. A rejected push is retried at most 3
-times: the job fetches the branch tip, requires that it still contains the head
-SHA and that only `doc_file` changed since, and replays its own commit on the tip
-with `git rebase --onto`. The artifact is not copied again, so edits made by the
-other run to other parts of `doc_file` are kept. If the branch was force-pushed,
-changed another file, or the replay conflicts, the job fails instead and the
-next run regenerates the documentation. Call from `pull_request`, not
-`pull_request_target`. A pull request from a fork or with an unknown head
-repository is skipped; the workflow does not update branches in forks.
+Callers must grant `contents: write`. Concurrent calls can update distinct
+sections of the **same `doc_file`**, as when plattform-terraform documents a
+plan and an apply workflow in one README. If another call pushes first, the
+job can retry up to 3 times. It requires the new branch tip to still contain
+the original PR head and to differ from it only in `doc_file`, then replays
+its commit with `git rebase --onto` instead of copying the artifact again.
+If the tip no longer contains the original head, any other file differs
+(including a different documentation file), or the replay conflicts, the
+job fails without pushing. A fresh run can regenerate from the new head.
+
+Call from `pull_request`, not `pull_request_target`. A pull request from a
+fork or with an unknown head repository is skipped; the workflow does not
+update branches in forks.
 
 Both jobs start by deleting any `.git` left in the workspace. Persistent
 self-hosted runners keep workspaces between jobs, and checkout would otherwise
@@ -158,9 +159,12 @@ README templates.
 3. Once the canary passes, remove only the variable check. Keep the draft
    guard and `ready_for_review` trigger.
 
-For local checks, run `bash tests/workflow.sh` (Linux, Git, and `yq` v4).
-It exercises the workflow's Bash steps with isolated files and a local Git
-repository. It does not run the container or the GitHub artifact service.
+The **Workflow regressions** check is independent of the self-test gate. Run
+the same check locally with `bash tests/check.sh` (Linux, Git, `yq` v4,
+Node.js 20 or newer, and npm). It runs `tests/workflow.sh` with isolated files
+and a local Git repository, and evaluates the workflow's actual expressions
+with a locked, test-only dependency. It does not run the container or the
+GitHub artifact service, and needs no GitHub credentials.
 
 ## Lockfile upkeep
 
